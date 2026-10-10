@@ -10,9 +10,12 @@ from anthropic import Anthropic
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(ROOT, "data", "articles.db")
 CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
+# YAML 1.1 reads a bare `off` as False; map it back so INTERVAL_DAYS lookups work
+CFG["tags"] = {k: "off" if v is False else v for k, v in CFG["tags"].items()}
 MODEL = "claude-haiku-4-5-20251001"
 ALLOWED = [t for t in CFG["tags"] if t != "default"]
 INTERVAL_DAYS = {"daily": 1, "weekly": 7, "off": None}
+MAX_ATTEMPTS = 3  # summarize failures before an article is recorded as skipped
 
 
 def db():
@@ -22,7 +25,8 @@ def db():
     c.executescript("""
     CREATE TABLE IF NOT EXISTS articles(url TEXT PRIMARY KEY, company TEXT, title TEXT,
       published TEXT, summary TEXT, takeaways TEXT, tags TEXT, sent INTEGER DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS tag_state(tag TEXT PRIMARY KEY, last_sent TEXT);""")
+    CREATE TABLE IF NOT EXISTS tag_state(tag TEXT PRIMARY KEY, last_sent TEXT);
+    CREATE TABLE IF NOT EXISTS failures(url TEXT PRIMARY KEY, attempts INTEGER);""")
     return c
 
 
@@ -43,6 +47,15 @@ Set technical=false for hiring posts, press releases, funding, culture or market
                                messages=[{"role": "user", "content": prompt}])
     t = r.content[0].text
     return json.loads(t[t.find("{"): t.rfind("}") + 1])
+
+
+def skip(c, url, company, title):
+    """Mark an article done without archiving or emailing it, so it is not retried."""
+    c.execute("INSERT OR IGNORE INTO articles VALUES(?,?,?,?,?,?,?,?)",
+              (url, company, title, dt.datetime.now(dt.timezone.utc).isoformat(),
+               "", "[]", "[]", 1))
+    c.execute("DELETE FROM failures WHERE url=?", (url,))
+    c.commit()
 
 
 def fetch():
@@ -68,6 +81,7 @@ def fetch():
                     page = trafilatura.fetch_url(url)
                     text = (trafilatura.extract(page) if page else None) or e.get("summary", "")
                     if len(text) < 200:
+                        skip(c, url, src["name"], e.get("title", url))
                         continue
                     r = summarize(client, e.get("title", ""), text)
                     published = (dt.datetime.fromtimestamp(calendar.timegm(ts), dt.timezone.utc)
@@ -82,6 +96,13 @@ def fetch():
                     time.sleep(1)
                 except Exception as ex:  # one bad article never stops the run
                     print(f"[error] {url}: {ex}")
+                    c.execute("INSERT INTO failures VALUES(?,1) ON CONFLICT(url) "
+                              "DO UPDATE SET attempts=attempts+1", (url,))
+                    c.commit()
+                    n = c.execute("SELECT attempts FROM failures WHERE url=?", (url,)).fetchone()[0]
+                    if n >= MAX_ATTEMPTS:
+                        print(f"[skip] {url}: failed {n} times")
+                        skip(c, url, src["name"], e.get("title", url))
         except Exception as ex:
             print(f"[error] feed {src['name']}: {ex}")
 
@@ -190,5 +211,12 @@ def build():
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "all"
     if cmd in ("fetch", "all"): fetch()
-    if cmd in ("send", "all"): send()
+    send_failed = False
+    if cmd in ("send", "all"):
+        try:
+            send()
+        except Exception as ex:  # still rebuild the archive if email fails
+            print(f"[error] send: {ex}")
+            send_failed = True
     if cmd in ("build", "all"): build()
+    if send_failed: sys.exit(1)  # fail the job so a broken email setup is noticed

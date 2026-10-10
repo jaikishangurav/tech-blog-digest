@@ -1,5 +1,5 @@
 # Email subject/links
-archive_url: "https://YOUR-USER.github.io/YOUR-REPO/"
+archive_url: "https://jaikishangurav.github.io/tech-blog-digest/"
 backfill_days: 14        # on first run, ignore posts older than this
 max_new_per_run: 30      # caps API cost per run
 
@@ -10,7 +10,7 @@ tags:
   databases: daily
   ml-infra: weekly
   ai-llm: daily
-  security: off
+  security: "off"
   frontend-mobile: weekly
   devops-cloud: daily
   default: weekly        # fallback for the "general" tag
