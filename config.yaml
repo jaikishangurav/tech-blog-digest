@@ -1,0 +1,29 @@
+# Email subject/links
+archive_url: "https://YOUR-USER.github.io/YOUR-REPO/"
+backfill_days: 14        # on first run, ignore posts older than this
+max_new_per_run: 30      # caps API cost per run
+
+# Allowed tags + how often each is emailed: daily | weekly | off
+# (the summarizer picks 1-3 of these per article; "off" tags are archived only)
+tags:
+  distributed-systems: daily
+  databases: daily
+  ml-infra: weekly
+  ai-llm: daily
+  security: off
+  frontend-mobile: weekly
+  devops-cloud: daily
+  default: weekly        # fallback for the "general" tag
+
+feeds:
+  - {name: Netflix, url: "https://netflixtechblog.com/feed"}
+  - {name: Uber, url: "https://www.uber.com/blog/engineering/rss/"}
+  - {name: Meta, url: "https://engineering.fb.com/feed/"}
+  - {name: AWS Architecture, url: "https://aws.amazon.com/blogs/architecture/feed/"}
+  - {name: Cloudflare, url: "https://blog.cloudflare.com/rss/"}
+  - {name: Airbnb, url: "https://medium.com/feed/airbnb-engineering"}
+  - {name: Stripe, url: "https://stripe.com/blog/feed.rss"}
+  - {name: GitHub, url: "https://github.blog/engineering/feed/"}
+  - {name: Discord, url: "https://discord.com/blog/rss.xml"}
+  - {name: Microsoft, url: "https://devblogs.microsoft.com/engineering-at-microsoft/feed/"}
+  - {name: Google Developers, url: "https://developers.googleblog.com/feeds/posts/default"}
