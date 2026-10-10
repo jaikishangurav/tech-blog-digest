@@ -5,14 +5,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import feedparser, trafilatura, yaml
-from anthropic import Anthropic
+from google import genai
+from google.genai import errors, types
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(ROOT, "data", "articles.db")
 CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
 # YAML 1.1 reads a bare `off` as False; map it back so INTERVAL_DAYS lookups work
 CFG["tags"] = {k: "off" if v is False else v for k, v in CFG["tags"].items()}
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = CFG.get("model", "gemini-3.5-flash-lite")
 ALLOWED = [t for t in CFG["tags"] if t != "default"]
 INTERVAL_DAYS = {"daily": 1, "weekly": 7, "off": None}
 MAX_ATTEMPTS = 3  # summarize failures before an article is recorded as skipped
@@ -43,9 +44,10 @@ Return ONLY a JSON object, no other text:
  "takeaways": ["3 short key takeaways"],
  "tags": ["1-3 tags chosen ONLY from {ALLOWED}"]}}
 Set technical=false for hiring posts, press releases, funding, culture or marketing content."""
-    r = client.messages.create(model=MODEL, max_tokens=600,
-                               messages=[{"role": "user", "content": prompt}])
-    t = r.content[0].text
+    r = client.models.generate_content(
+        model=MODEL, contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json"))
+    t = r.text
     return json.loads(t[t.find("{"): t.rfind("}") + 1])
 
 
@@ -59,7 +61,7 @@ def skip(c, url, company, title):
 
 
 def fetch():
-    c, client = db(), Anthropic()
+    c, client = db(), genai.Client()  # reads GEMINI_API_KEY
     cutoff = time.time() - CFG.get("backfill_days", 14) * 86400
     budget = CFG.get("max_new_per_run", 30)
     for src in CFG["feeds"]:
@@ -93,8 +95,11 @@ def fetch():
                                r["summary"] if ok else "", json.dumps(r.get("takeaways", [])),
                                json.dumps(tags), 0 if ok else 1))
                     c.commit()
-                    time.sleep(1)
+                    time.sleep(CFG.get("request_delay", 6))
                 except Exception as ex:  # one bad article never stops the run
+                    if isinstance(ex, errors.APIError) and ex.code == 429:
+                        print(f"[warn] rate limited, stopping fetch: {ex}")
+                        return  # quota hit: not the article's fault, retry next run
                     print(f"[error] {url}: {ex}")
                     c.execute("INSERT INTO failures VALUES(?,1) ON CONFLICT(url) "
                               "DO UPDATE SET attempts=attempts+1", (url,))
