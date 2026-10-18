@@ -39,7 +39,9 @@ The database is created again on the first run. `docs/index.html` is rebuilt eve
 ### 3. Edit `config.yaml`
 
 - **`archive_url`:** change it to `https://<your-username>.github.io/tech-blog-digest/`. This link goes at the bottom of each email.
-- **`feeds`:** add or remove blogs. Each entry needs a `name` and an RSS/Atom `url`.
+- **`interests`:** describe in plain words what you want to read. Gemini scores each article from 1 to 5 against this description.
+- **`min_score`:** only articles scoring at least this much are emailed (default `4`). Lower-scoring articles still appear in the archive. Use `5` for deep dives only, or `3` for more articles.
+- **`feeds`:** add or remove blogs. Each entry needs a `name` and an RSS/Atom `url`. Add an optional `max_per_email: N` to limit how many articles a busy blog can put in one email. Its highest-scoring articles are kept, and the rest go to the archive only.
 - **`tags`:** choose how often each topic is emailed: `daily`, `weekly` or `"off"` (archive only). Keep `"off"` in quotes, because YAML reads a bare `off` as false. `default` sets the frequency for articles that don't match any tag.
 - **`model`:** the Gemini model to use (see step 4).
 - **`max_new_per_run`:** the maximum number of articles summarized per run. Keep it at or below your model's free daily request limit.
