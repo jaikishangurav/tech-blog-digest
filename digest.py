@@ -17,6 +17,8 @@ MODEL = CFG.get("model", "gemini-3.5-flash-lite")
 ALLOWED = [t for t in CFG["tags"] if t != "default"]
 INTERVAL_DAYS = {"daily": 1, "weekly": 7, "off": None}
 MAX_ATTEMPTS = 3  # summarize failures before an article is recorded as skipped
+MIN_SCORE = CFG.get("min_score", 4)  # articles scoring lower are archived but not emailed
+FEED_CAPS = {f["name"]: f["max_per_email"] for f in CFG["feeds"] if "max_per_email" in f}
 
 
 def db():
@@ -28,6 +30,8 @@ def db():
       published TEXT, summary TEXT, takeaways TEXT, tags TEXT, sent INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS tag_state(tag TEXT PRIMARY KEY, last_sent TEXT);
     CREATE TABLE IF NOT EXISTS failures(url TEXT PRIMARY KEY, attempts INTEGER);""")
+    if "score" not in [r["name"] for r in c.execute("PRAGMA table_info(articles)")]:
+        c.execute("ALTER TABLE articles ADD COLUMN score INTEGER")
     return c
 
 
@@ -38,12 +42,22 @@ def summarize(client, title, text):
 Article text:
 {text[:12000]}
 
+The reader's interests: {CFG.get("interests", "software engineering").strip()}
+
 Return ONLY a JSON object, no other text:
 {{"technical": true/false,
+ "score": 1-5,
  "summary": "2-3 sentence summary",
  "takeaways": ["3 short key takeaways"],
  "tags": ["1-3 tags chosen ONLY from {ALLOWED}"]}}
-Set technical=false for hiring posts, press releases, funding, culture or marketing content."""
+Set technical=false for hiring posts, press releases, funding, culture or marketing content.
+score is how much this reader would value the article:
+5 = in-depth engineering write-up on their interests (architecture, scaling, migrations,
+    incidents, performance, lessons learned) with real technical detail
+4 = solid technical content on their interests, somewhat less depth
+3 = relevant but shallow, or partly promotional
+2 = product/feature announcement, launch roundup, or customer case study
+1 = off-topic for this reader"""
     r = client.models.generate_content(
         model=MODEL, contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json"))
@@ -53,7 +67,8 @@ Set technical=false for hiring posts, press releases, funding, culture or market
 
 def skip(c, url, company, title):
     """Mark an article done without archiving or emailing it, so it is not retried."""
-    c.execute("INSERT OR IGNORE INTO articles VALUES(?,?,?,?,?,?,?,?)",
+    c.execute("INSERT OR IGNORE INTO articles(url,company,title,published,summary,takeaways,"
+              "tags,sent) VALUES(?,?,?,?,?,?,?,?)",
               (url, company, title, dt.datetime.now(dt.timezone.utc).isoformat(),
                "", "[]", "[]", 1))
     c.execute("DELETE FROM failures WHERE url=?", (url,))
@@ -90,10 +105,13 @@ def fetch():
                                  if ts else dt.datetime.now(dt.timezone.utc)).isoformat()
                     tags = [t for t in r.get("tags", []) if t in ALLOWED] or ["general"]
                     ok = bool(r.get("technical"))
-                    c.execute("INSERT INTO articles VALUES(?,?,?,?,?,?,?,?)",
+                    score = int(r.get("score") or 0)
+                    # non-technical: dropped; below min_score: archived but never emailed
+                    c.execute("INSERT INTO articles(url,company,title,published,summary,"
+                              "takeaways,tags,sent,score) VALUES(?,?,?,?,?,?,?,?,?)",
                               (url, src["name"], e.get("title", url), published,
                                r["summary"] if ok else "", json.dumps(r.get("takeaways", [])),
-                               json.dumps(tags), 0 if ok else 1))
+                               json.dumps(tags), 0 if ok and score >= MIN_SCORE else 1, score))
                     c.commit()
                     time.sleep(CFG.get("request_delay", 6))
                 except Exception as ex:  # one bad article never stops the run
@@ -132,12 +150,17 @@ def send():
     c, now = db(), dt.datetime.now(dt.timezone.utc)
     due = {t for t in ALLOWED + ["general"] if is_due(c, t, now)}
     rows = c.execute("SELECT * FROM articles WHERE sent=0 AND summary!='' "
-                     "ORDER BY published DESC").fetchall()
-    groups = {}
+                     "ORDER BY score DESC, published DESC").fetchall()
+    groups, per_feed, capped = {}, {}, []
     for r in rows:  # each article is emailed once, under its first due tag
         first = next((t for t in json.loads(r["tags"]) if t in due), None)
-        if first:
-            groups.setdefault(first, []).append(r)
+        if not first:
+            continue
+        n = per_feed[r["company"]] = per_feed.get(r["company"], 0) + 1
+        if n > FEED_CAPS.get(r["company"], n):
+            capped.append(r)  # over the feed's cap: archive only (rows are best-first)
+            continue
+        groups.setdefault(first, []).append(r)
     if not groups:
         print("Nothing due to send.")
         return
@@ -159,7 +182,8 @@ def send():
         s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
         s.send_message(msg)
     c.executemany("UPDATE articles SET sent=1 WHERE url=?",
-                  [(a["url"],) for v in groups.values() for a in v])
+                  [(a["url"],) for v in groups.values() for a in v] +
+                  [(a["url"],) for a in capped])
     for tag in groups:
         c.execute("INSERT OR REPLACE INTO tag_state VALUES(?,?)", (tag, now.isoformat()))
     c.commit()
