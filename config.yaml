@@ -39,3 +39,5 @@ feeds:
   - {name: Discord, url: "https://discord.com/blog/rss.xml"}
   - {name: Microsoft, url: "https://devblogs.microsoft.com/engineering-at-microsoft/feed/"}
   - {name: Google Developers, url: "https://developers.googleblog.com/feeds/posts/default"}
+  - {name: HackerNoon SWE, url: "https://hackernoon.com/tagged/software-engineering/feed", max_per_email: 2}
+  - {name: HackerNoon DevOps, url: "https://hackernoon.com/tagged/devops/feed", max_per_email: 2}
